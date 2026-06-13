@@ -10,6 +10,7 @@ import threading
 import time
 import traceback
 import warnings
+import webbrowser
 from pathlib import Path
 from typing import Any, Optional
 from collections import deque
@@ -18,7 +19,7 @@ StudioCapturePro
 A high-performance screen recording framework with DSP noise gating.
 """
 
-__version__ = "1.0.0"
+__version__ = "1.0.2"
 __author__ = "Madhava"
 
 
@@ -145,6 +146,12 @@ AUDIO_CAPTURE_BUFFER_MULTIPLIER = 8
 AUDIO_DISCONTINUITY_LOG_INTERVAL = 10.0
 AUDIO_BOUNDARY_FADE_SECONDS = 0.003
 AUDIO_MISSING_FADE_SECONDS = 0.008
+PROJECT_LINKS = (
+    ("PYPI PROFILE", "https://pypi.org/user/brightlyyy/"),
+    ("GITHUB PROFILE", "https://github.com/madhavabrightly"),
+    ("SOURCE CODE", "https://github.com/madhavabrightly/screenrecorder-fullpython"),
+    ("AUTHOR PROFILE", "https://gravatar.com/madhavabrightly"),
+)
 
 
 def ensure_app_directory() -> None:
@@ -1165,7 +1172,7 @@ class StudioCapturePro(ctk.CTk):
     def __init__(self):
         super().__init__()
         self.title("Studio Capture Pro")
-        self.geometry("600x480")
+        self.geometry("780x680")
         self.resizable(False, False)
         self.configure(fg_color="#14161d")
         self.protocol("WM_DELETE_WINDOW", self._on_close)
@@ -1192,7 +1199,7 @@ class StudioCapturePro(ctk.CTk):
         ctk.CTkLabel(
             self,
             text="STUDIO CAPTURE PRO",
-            font=("Roboto", 16, "bold"),
+            font=("Roboto", 20, "bold"),
             text_color="#00bcd4",
         ).pack(pady=(20, 5))
 
@@ -1245,9 +1252,40 @@ class StudioCapturePro(ctk.CTk):
             font=("Roboto", 11),
             text_color="#a0a5b5",
             anchor="w",
-            wraplength=420,
+            wraplength=590,
         )
         self.lbl_path.pack(side="left", fill="x", expand=True, padx=(0, 10))
+
+        links_frame = ctk.CTkFrame(self, fg_color="#1a1d26", corner_radius=8)
+        links_frame.pack(fill="x", padx=30, pady=(0, 10))
+        ctk.CTkLabel(
+            links_frame,
+            text="PROJECT LINKS",
+            font=("Roboto", 13, "bold"),
+            text_color="#00bcd4",
+        ).pack(anchor="w", padx=20, pady=(14, 3))
+        ctk.CTkLabel(
+            links_frame,
+            text="Official downloads, source code, and author profiles",
+            font=("Roboto", 11),
+            text_color="#a0a5b5",
+        ).pack(anchor="w", padx=20, pady=(0, 10))
+
+        link_buttons = ctk.CTkFrame(links_frame, fg_color="transparent")
+        link_buttons.pack(fill="x", padx=15, pady=(0, 15))
+        for column in range(2):
+            link_buttons.grid_columnconfigure(column, weight=1)
+        for index, (label, url) in enumerate(PROJECT_LINKS):
+            row, column = divmod(index, 2)
+            ctk.CTkButton(
+                link_buttons,
+                text=label,
+                height=42,
+                font=("Roboto", 11, "bold"),
+                fg_color="#222530",
+                hover_color="#00bcd4",
+                command=lambda target=url: self._open_project_link(target),
+            ).grid(row=row, column=column, sticky="ew", padx=5, pady=5)
 
         controls = ctk.CTkFrame(self, fg_color="transparent")
         controls.pack(fill="x", padx=30, pady=(10, 15))
@@ -1258,6 +1296,19 @@ class StudioCapturePro(ctk.CTk):
         )
         self.btn_stop.configure_state("disabled")
         self.btn_stop.pack(side="left")
+
+    def _open_project_link(self, url: str) -> None:
+        """Open an official project link in the user's default browser."""
+        try:
+            if not webbrowser.open_new_tab(url):
+                raise RuntimeError("No default web browser accepted the link")
+        except Exception as exc:
+            write_log(f"Unable to open project link {url}: {exc}")
+            messagebox.showerror(
+                "Link Error",
+                f"Unable to open this link:\n{url}",
+                parent=self,
+            )
 
     def _current_settings(self) -> dict[str, Any]:
         return {

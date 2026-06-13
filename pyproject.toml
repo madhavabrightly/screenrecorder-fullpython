@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "studioscreenrecorder"
-version = "1.0.1"
+version = "1.0.2"
 authors = [
     { name="Madhava", email="your.email@example.com" },
 ]
@@ -26,7 +26,11 @@ dependencies = [
 ]
 
 [project.urls]
-Homepage = "https://github.com/madhavabrightly/MentorTokenWallet"
+Homepage = "https://pypi.org/project/studioscreenrecorder/"
+Repository = "https://github.com/madhavabrightly/screenrecorder-fullpython"
+"GitHub Profile" = "https://github.com/madhavabrightly"
+"PyPI Profile" = "https://pypi.org/user/brightlyyy/"
+"Gravatar Profile" = "https://gravatar.com/madhavabrightly"
 
 [project.scripts]
 studioscreenrecorder = "studiocapturepro.recorder:main"
