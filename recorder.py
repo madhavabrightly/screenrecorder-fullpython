@@ -52,11 +52,15 @@ def run_folder_picker_helper() -> int:
 
     root = tk.Tk()
     root.withdraw()
-    root.attributes("-topmost", True)
-    root.update_idletasks()
     try:
+        try:
+            root.attributes("-topmost", True)
+            root.lift()
+            root.focus_force()
+            root.update()
+        except Exception:
+            pass
         folder = filedialog.askdirectory(
-            parent=root,
             title="Select the folder where recordings will be saved",
             initialdir=sys.argv[2],
             mustexist=True,
@@ -64,28 +68,18 @@ def run_folder_picker_helper() -> int:
         if folder:
             Path(sys.argv[3]).write_text(folder, encoding="utf-8")
         return 0
+    except Exception:
+        log_exception("Folder picker helper failed")
+        return 1
     finally:
         root.destroy()
 
 
 def folder_picker_command(initial_directory: Path, result_file: Path) -> list[str]:
-    """Build a lightweight picker command, with a Python fallback."""
-    powershell = shutil.which("powershell.exe") if platform.system() == "Windows" else None
-    if powershell:
-        return [
-            powershell,
-            "-NoProfile",
-            "-NonInteractive",
-            "-STA",
-            "-WindowStyle",
-            "Hidden",
-            "-Command",
-            POWERSHELL_FOLDER_PICKER,
-            str(initial_directory),
-            str(result_file),
-        ]
-
-    command = [sys.executable]
+    """Build a helper command that keeps folder selection out of the main UI process."""
+    executable = Path(sys.executable)
+    pythonw = executable.with_name("pythonw.exe")
+    command = [str(pythonw if pythonw.exists() else executable)]
     if not getattr(sys, "frozen", False):
         command.append(str(Path(__file__).resolve()))
     command.extend([FOLDER_PICKER_ARG, str(initial_directory), str(result_file)])
@@ -100,7 +94,7 @@ import customtkinter as ctk
 import imageio_ffmpeg
 import numpy as np
 import soundcard as sc
-from tkinter import messagebox
+from tkinter import filedialog, messagebox
 from scipy import signal
 from scipy.fft import rfft, irfft
 
@@ -989,13 +983,18 @@ class CaptureEngine:
             ensure_app_directory()
             self.stderr_file = LOG_FILE.open("ab")
             creation_flags = subprocess.CREATE_NO_WINDOW if os.name == "nt" else 0
-            self.ffmpeg_proc = subprocess.Popen(
-                command,
-                stdin=subprocess.PIPE,
-                stdout=subprocess.DEVNULL,
-                stderr=self.stderr_file,
-                creationflags=creation_flags,
-            )
+            try:
+                self.ffmpeg_proc = subprocess.Popen(
+                    command,
+                    stdin=subprocess.PIPE,
+                    stdout=subprocess.DEVNULL,
+                    stderr=self.stderr_file,
+                    creationflags=creation_flags,
+                )
+            except Exception:
+                self._close_log_file()
+                self.ffmpeg_proc = None
+                raise
 
             time.sleep(0.15)
             if self.ffmpeg_proc.poll() is not None:
@@ -1175,6 +1174,9 @@ class StudioCapturePro(ctk.CTk):
         self.out_path: Optional[Path] = None
         self._browse_process: Optional[subprocess.Popen] = None
         self._browse_result_file: Optional[Path] = None
+        self._browse_poll_after_id: Optional[str] = None
+        self._browse_active = False
+        self._finalizing = False
         self.closing = False
         self._build_ui()
         self.after(500, lambda: WindowsGlassEngine.apply_acrylic_theme(self))
@@ -1259,34 +1261,37 @@ class StudioCapturePro(ctk.CTk):
         }
 
     def _browse_folder(self) -> None:
-        """Open the folder browser without blocking Tk's main UI thread."""
-        if self.engine.recording or (
+        """Open the folder picker outside the main UI process."""
+        if self.engine.recording or self._browse_active or (
             self._browse_process is not None and self._browse_process.poll() is None
         ):
             return
 
+        self._browse_active = True
         self.btn_browse.configure(state="disabled")
-        self.update_idletasks()
-
         try:
             ensure_app_directory()
             result_file = APP_DIR / f".folder_picker_{os.getpid()}_{time.time_ns()}.txt"
             result_file.unlink(missing_ok=True)
-
             command = folder_picker_command(self.save_directory, result_file)
-
             self._browse_result_file = result_file
             self._browse_process = subprocess.Popen(
                 command,
                 creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
             )
-            self.after(100, self._poll_browse_process)
+            self._schedule_browse_poll(125)
         except Exception:
             log_exception("Unable to open folder browser")
             self._browse_cleanup()
 
+    def _schedule_browse_poll(self, delay_ms: int = 125) -> None:
+        """Ensure only one poll callback is queued at a time."""
+        if self._browse_poll_after_id is None:
+            self._browse_poll_after_id = self.after(delay_ms, self._poll_browse_process)
+
     def _poll_browse_process(self) -> None:
         """Collect the folder picker result while keeping the main UI responsive."""
+        self._browse_poll_after_id = None
         process = self._browse_process
         if process is None:
             self._browse_cleanup()
@@ -1294,7 +1299,8 @@ class StudioCapturePro(ctk.CTk):
 
         return_code = process.poll()
         if return_code is None:
-            self.after(100, self._poll_browse_process)
+            # Slightly lower poll cadence to avoid unnecessary UI churn while dialog is open.
+            self._schedule_browse_poll(200)
             return
 
         result_file = self._browse_result_file
@@ -1316,6 +1322,12 @@ class StudioCapturePro(ctk.CTk):
 
     def _cancel_browse_process(self) -> None:
         """Stop an open picker when the main application is closing."""
+        if self._browse_poll_after_id is not None:
+            try:
+                self.after_cancel(self._browse_poll_after_id)
+            except Exception:
+                pass
+            self._browse_poll_after_id = None
         process = self._browse_process
         if process is not None and process.poll() is None:
             try:
@@ -1326,6 +1338,7 @@ class StudioCapturePro(ctk.CTk):
             self._browse_result_file.unlink(missing_ok=True)
         self._browse_process = None
         self._browse_result_file = None
+        self._browse_active = False
     
     def _browse_worker(self) -> None:
         """Worker thread for folder selection"""
@@ -1447,6 +1460,8 @@ class StudioCapturePro(ctk.CTk):
     
     def _browse_cleanup(self) -> None:
         """Re-enable browse button after dialog closes"""
+        self._browse_active = False
+        self._browse_poll_after_id = None
         if not self.engine.recording:
             self.btn_browse.configure(state="normal")
         self.update_idletasks()
@@ -1484,17 +1499,23 @@ class StudioCapturePro(ctk.CTk):
         self.txt.configure(text="LIVE \u2022 60 FPS", text_color="#e74c3c")
 
     def _stop(self) -> None:
-        if not self.engine.recording:
+        if self._finalizing or self.engine.ffmpeg_proc is None:
             return
+        self._finalizing = True
         self.btn_stop.configure_state("disabled")
         self.txt.configure(text="FINALIZING...", text_color="#3498db")
         threading.Thread(target=self._teardown, daemon=True, name="recording-finalizer").start()
 
     def _teardown(self) -> None:
-        success, message = self.engine.stop()
+        try:
+            success, message = self.engine.stop()
+        except Exception as exc:
+            log_exception("Unexpected recording finalization failure")
+            success, message = False, f"Unable to finalize recording: {exc}\n\nLog: {LOG_FILE}"
         self.after(0, lambda: self._reset_ui(success, message))
 
     def _reset_ui(self, success: bool, message: str) -> None:
+        self._finalizing = False
         self._set_recording_controls(False)
         self.dot.configure(text_color="#2ecc71" if success else "#e74c3c")
         self.txt.configure(
@@ -1511,6 +1532,9 @@ class StudioCapturePro(ctk.CTk):
 
     def _on_close(self) -> None:
         save_settings(self._current_settings())
+        if self._finalizing:
+            self.closing = True
+            return
         if not self.engine.recording:
             self._cancel_browse_process()
             self.destroy()
@@ -1526,8 +1550,17 @@ class StudioCapturePro(ctk.CTk):
         self._stop()
 
 
-if __name__ == "__main__":
+def main():
+    """Package entry point hook for system binaries."""
     ensure_app_directory()
-    write_log("Application started")
+    write_log("Application started via package wrapper")
     app = StudioCapturePro()
     app.mainloop()
+
+
+if __name__ == "__main__":
+    # If users launch the dialog picker worker, handle it directly
+    if len(sys.argv) > 1 and sys.argv[1] == FOLDER_PICKER_ARG:
+        raise SystemExit(run_folder_picker_helper())
+    else:
+        main()
